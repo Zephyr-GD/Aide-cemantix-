@@ -1,15 +1,19 @@
 import os
 import requests
+import numpy as np
 import streamlit as st
 from gensim.models import KeyedVectors
+
+# Configuration de la page
+st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
 @st.cache_resource
 def charger_modele():
     """Télécharge et charge le modèle Word2Vec français depuis GitHub Releases."""
-    url = "https://github.com/lovasoa/cemantriche/releases/download/v0/frWac_non_lem_no_postag_no_phrase_200_cbow_cut100.bin"
+    url = "https://github.com"
     nom_fichier = "frWac_200_cbow_cut100.bin"
 
-    # Vérifie que le fichier n'existe pas ou qu'il n'est pas vide (erreur précédente)
+    # Télécharge le fichier s'il n'existe pas ou s'il est incomplet
     if not os.path.exists(nom_fichier) or os.path.getsize(nom_fichier) < 10_000_000:
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
@@ -19,7 +23,6 @@ def charger_modele():
 
     # limit=150000 évite de dépasser la limite de 1 Go de RAM sur Streamlit Cloud
     return KeyedVectors.load_word2vec_format(nom_fichier, binary=True, limit=150000)
-    
 
 st.title("🧠 Aide Cémantix")
 st.write("Trouvez le mot secret en croisant les scores de similarité de vos essais.")
@@ -38,11 +41,10 @@ if "mots_saisis" not in st.session_state:
 
 # Formulaire pour ajouter un mot et son score
 with st.form("ajout_mot", clear_on_submit=True):
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns(2)
     with col1:
         mot = st.text_input("Mot testé sur Cémantix", placeholder="Ex: maison").strip().lower()
     with col2:
-        # Cémantix affiche un score entre -100 et 100 (qui correspond à la similarité cosinus * 100)
         score = st.number_input("Score (°C)", min_value=-100.0, max_value=100.0, value=25.0, step=0.01)
     
     soumis = st.form_submit_button("Ajouter l'indice")
@@ -116,4 +118,4 @@ if st.session_state.mots_saisis:
             st.write(", ".join([f"**{m}**" for m in resultats]))
         else:
             st.info("Tous les mots correspondants ont déjà été testés.")
-            
+    
