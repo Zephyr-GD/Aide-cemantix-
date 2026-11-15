@@ -4,11 +4,22 @@ import numpy as np
 import streamlit as st
 from gensim.models import KeyedVectors
 
-# Configuration de la page
 st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
+MODELES = {
+    "Standard (Rapide - 200d CBOW)": {
+        "url": "https://github.com",
+        "fichier": "frWac_200_cbow.bin",
+        "limit": 150000
+    },
+    "Précision (Recommandé - 500d Skip-gram)": {
+        "url": "https://huggingface.co",
+        "fichier": "frWac_500_skip.bin",
+        "limit": 100000
+    }
+}
+
 def fichier_valide(chemin):
-    """Vérifie que le fichier existe, fait plus de 50 Mo et possède un en-tête Word2Vec valide."""
     if not os.path.exists(chemin) or os.path.getsize(chemin) < 50_000_000:
         return False
     try:
@@ -20,123 +31,125 @@ def fichier_valide(chemin):
         return False
 
 @st.cache_resource
-def charger_modele():
-    """Télécharge et charge le modèle Word2Vec français."""
-    url = "https://github.com/lovasoa/cemantriche/releases/download/v0/frWac_non_lem_no_postag_no_phrase_200_cbow_cut100.bin"
-    nom_fichier = "frWac_200_cbow_cut100.bin"
+def charger_modele(choix_modele):
+    info = MODELES[choix_modele]
+    nom_fichier = info["fichier"]
 
-    # Si un ancien fichier corrompu existe, on le supprime et on le retélécharge
     if not fichier_valide(nom_fichier):
         if os.path.exists(nom_fichier):
             os.remove(nom_fichier)
         
         headers = {"User-Agent": "Mozilla/5.0"}
-        with requests.get(url, headers=headers, stream=True, allow_redirects=True) as r:
+        with requests.get(info["url"], headers=headers, stream=True, allow_redirects=True) as r:
             r.raise_for_status()
             with open(nom_fichier, "wb") as f:
                 for chunk in r.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
 
-    # Vérification finale avant chargement
     if not fichier_valide(nom_fichier):
         raise ValueError("Le fichier téléchargé n'est pas un modèle Word2Vec valide.")
 
-    # limit=150000 préserve la RAM sur Streamlit Cloud (1 Go max)
-    return KeyedVectors.load_word2vec_format(
+    kv = KeyedVectors.load_word2vec_format(
         nom_fichier, 
         binary=True, 
-        limit=150000, 
+        limit=info["limit"], 
         unicode_errors="ignore"
     )
+    # Pré-normalisation des vecteurs pour des calculs instantanés
+    kv.fill_norms()
+    return kv
 
 st.title("🧠 Aide Cémantix")
-st.write("Trouvez le mot secret en croisant les scores de similarité de vos essais.")
 
-# Chargement du modèle
-with st.spinner("Chargement du dictionnaire IA (15 à 30 secondes au premier lancement)..."):
+choix_modele = st.selectbox("Modèle linguistique :", list(MODELES.keys()), index=1)
+
+with st.spinner("Chargement du dictionnaire IA..."):
     try:
-        modele = charger_modele()
+        modele = charger_modele(choix_modele)
     except Exception as e:
-        st.error(f"Erreur lors du chargement du modèle : {e}")
+        st.error(f"Erreur lors du chargement : {e}")
         st.stop()
 
-# Initialisation de l'historique des mots
 if "mots_saisis" not in st.session_state:
     st.session_state.mots_saisis = []
 
-# Formulaire pour ajouter un mot et son score
+# Ajout rapide par lot (copier-coller) ou un par un
+with st.expander("📋 Coller plusieurs indices d'un coup"):
+    texte_lot = st.text_area(
+        "Format : mot : score (un par ligne)", 
+        placeholder="nature : -2.32\nformulaire : 9.81\nlisible : 7.73"
+    )
+    if st.button("Importer la liste"):
+        for ligne in texte_lot.splitlines():
+            if ":" in ligne:
+                parties = ligne.split(":")
+                m = parties[0].strip().lower()
+                s_str = parties[1].replace("°C", "").replace(",", ".").strip()
+                try:
+                    s = float(s_str)
+                    if m in modele:
+                        st.session_state.mots_saisis = [x for x in st.session_state.mots_saisis if x["mot"] != m]
+                        st.session_state.mots_saisis.append({"mot": m, "score": s / 100.0})
+                except ValueError:
+                    pass
+
 with st.form("ajout_mot", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
         mot = st.text_input("Mot testé sur Cémantix", placeholder="Ex: maison").strip().lower()
     with col2:
-        score = st.number_input("Score (°C)", min_value=-100.0, max_value=100.0, value=25.0, step=0.01)
+        score = st.number_input("Score (°C)", min_value=-100.0, max_value=100.0, value=10.0, step=0.01)
     
-    soumis = st.form_submit_button("Ajouter l'indice")
+    if st.form_submit_button("Ajouter l'indice") and mot:
+        if mot in modele:
+            st.session_state.mots_saisis = [m for m in st.session_state.mots_saisis if m["mot"] != mot]
+            st.session_state.mots_saisis.append({"mot": mot, "score": score / 100.0})
+        else:
+            st.warning(f"Le mot **'{mot}'** est absent du dictionnaire.")
 
-if soumis and mot:
-    if mot in modele:
-        st.session_state.mots_saisis = [m for m in st.session_state.mots_saisis if m["mot"] != mot]
-        st.session_state.mots_saisis.append({"mot": mot, "score": score / 100.0})
-    else:
-        st.warning(f"Le mot **'{mot}'** n'est pas dans le dictionnaire du modèle.")
-
-# Affichage des indices enregistrés et recherche des candidats
 if st.session_state.mots_saisis:
     st.subheader("Vos indices")
     for item in st.session_state.mots_saisis:
         st.write(f"- **{item['mot']}** : {item['score'] * 100:.2f} °C")
 
-    if st.button("🗑️ Réinitialiser les indices"):
+    if st.button("🗑️ Réinitialiser"):
         st.session_state.mots_saisis = []
         st.rerun()
 
     st.divider()
-    st.subheader("🔍 Mots candidats les plus probables")
+    st.subheader("🔍 Top 30 des meilleurs candidats (Classement par proximité)")
 
-    # Paramètre de tolérance pour l'intervalle de recherche
-    marge = st.slider(
-        "Marge d'erreur tolérée sur le score (± °C)", 
-        min_value=1.0, max_value=15.0, value=4.0, step=0.5
-    ) / 100.0
-
-    # Calcul vectorisé des similarités sur tout le vocabulaire
-    vecteurs_vocab = modele.vectors
-    normes_vocab = np.linalg.norm(vecteurs_vocab, axis=1)
-    
-    masque_valide = np.ones(len(modele.index_to_key), dtype=bool)
-    erreur_totale = np.zeros(len(modele.index_to_key))
+    vecteurs_norm = modele.get_normed_vectors()
+    erreur_quadratique = np.zeros(len(modele.index_to_key))
 
     for item in st.session_state.mots_saisis:
-        vec_mot = modele[item["mot"]]
-        norme_mot = np.linalg.norm(vec_mot)
+        idx_mot = modele.key_to_index[item["mot"]]
+        vec_mot = vecteurs_norm[idx_mot]
         
-        similarites = np.dot(vecteurs_vocab, vec_mot) / (normes_vocab * norme_mot)
-        diff = np.abs(similarites - item["score"])
+        # Produit scalaire direct car les vecteurs sont déjà normalisés
+        similarites = np.dot(vecteurs_norm, vec_mot)
         
-        masque_valide &= (diff <= marge)
-        erreur_totale += diff
+        # Pondération : on donne plus d'importance aux mots proches du but (scores positifs élevés)
+        poids = 1.0 + max(0.0, item["score"] * 5.0)
+        erreur_quadratique += poids * ((similarites - item["score"]) ** 2)
 
-    indices_candidats = np.where(masque_valide)[0]
-
-    if len(indices_candidats) == 0:
-        st.info("Aucun mot trouvé dans cet intervalle. Essayez d'augmenter la **marge d'erreur** ci-dessus.")
-    else:
-        indices_tries = indices_candidats[np.argsort(erreur_totale[indices_candidats])]
-        mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
-        
-        resultats = []
-        for idx in indices_tries:
-            candidat = modele.index_to_key[idx]
-            if candidat not in mots_deja_testes and candidat.isalpha():
-                resultats.append(candidat)
-            if len(resultats) >= 30:
-                break
-        
-        if resultats:
-            st.success(f"**{len(indices_candidats)}** mots correspondent. Voici les meilleurs candidats :")
-            st.write(", ".join([f"**{m}**" for m in resultats]))
-        else:
-            st.info("Tous les mots correspondants ont déjà été testés.")
-                
+    indices_tries = np.argsort(erreur_quadratique)
+    mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
+    
+    resultats = []
+    for idx in indices_tries:
+        candidat = modele.index_to_key[idx]
+        # Filtrage des mots valides (minuscules uniquement, pas de noms propres ni chiffres)
+        if (
+            candidat not in mots_deja_testes 
+            and candidat.isalpha() 
+            and candidat.islower() 
+            and len(candidat) >= 3
+        ):
+            ecart_moyen = np.sqrt(erreur_quadratique[idx] / len(st.session_state.mots_saisis)) * 100
+            resultats.append(f"**{candidat}** (±{ecart_moyen:.1f}°)")
+        if len(resultats) >= 30:
+            break
+    
+    st.write(", ".join(resultats))
