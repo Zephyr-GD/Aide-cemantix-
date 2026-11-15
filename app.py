@@ -7,18 +7,17 @@ from gensim.models import KeyedVectors
 st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
 MODELES = {
-    "Standard (Rapide - 200d CBOW - Recommandé Streamlit)": {
+    "Standard (Rapide - 200d CBOW - Fauconnier)": {
         "url": "https://embeddings.net",
         "fichier": "frWac_200_cbow.bin",
         "limit": 150000
     },
-    "Précision (Lourd - 500d Skip-gram - Risque saturation RAM)": {
+    "Précision (Lourd - 500d Skip-gram - Fauconnier)": {
         "url": "https://embeddings.net",
         "fichier": "frWac_500_skip.bin",
         "limit": 100000
     }
 }
-
 
 def fichier_valide(chemin):
     if not os.path.exists(chemin) or os.path.getsize(chemin) < 50_000_000:
@@ -30,6 +29,42 @@ def fichier_valide(chemin):
             return len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
     except Exception:
         return False
+
+@st.cache_resource
+def charger_modele(choix_modele):
+    info = MODELES[choix_modele]
+    nom_fichier = info["fichier"]
+
+    if not fichier_valide(nom_fichier):
+        if os.path.exists(nom_fichier):
+            os.remove(nom_fichier)
+        
+        headers = {"User-Agent": "Mozilla/5.0"}
+        with requests.get(info["url"], headers=headers, stream=True, allow_redirects=True, timeout=120) as r:
+            r.raise_for_status()
+            content_type = r.headers.get("Content-Type", "")
+            if "text/html" in content_type:
+                raise ValueError(f"Le serveur a renvoyé une page HTML au lieu du modèle (URL : {r.url}).")
+            with open(nom_fichier, "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+
+    if not fichier_valide(nom_fichier):
+        taille = os.path.getsize(nom_fichier) if os.path.exists(nom_fichier) else 0
+        with open(nom_fichier, "rb") as f:
+            apercu = f.read(120)
+        raise ValueError(f"Fichier invalide ({taille} octets). Début du contenu : {apercu}")
+
+    kv = KeyedVectors.load_word2vec_format(
+        nom_fichier, 
+        binary=True, 
+        limit=info["limit"], 
+        unicode_errors="ignore"
+    )
+    kv.fill_norms()
+    os.remove(nom_fichier)
+    return kv
 
 @st.cache_resource
 def charger_modele(choix_modele):
