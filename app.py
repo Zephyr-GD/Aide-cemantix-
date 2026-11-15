@@ -1,20 +1,25 @@
+import os
+import requests
 import streamlit as st
 from gensim.models import KeyedVectors
-from huggingface_hub import hf_hub_download
-import numpy as np
-
-# Configuration de la page
-st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
 @st.cache_resource
 def charger_modele():
-    """Télécharge et charge le modèle Word2Vec français depuis Hugging Face."""
-    chemin_fichier = hf_hub_download(
-        repo_id="fauconnier/frWac_non_lem_no_postag_no_phrase_200_cbow_cut100",
-        filename="frWac_non_lem_no_postag_no_phrase_200_cbow_cut100.bin"
-    )
+    """Télécharge et charge le modèle Word2Vec français depuis GitHub Releases."""
+    url = "https://github.com/lovasoa/cemantriche/releases/download/v0/frWac_non_lem_no_postag_no_phrase_200_cbow_cut100.bin"
+    nom_fichier = "frWac_200_cbow_cut100.bin"
+
+    # Vérifie que le fichier n'existe pas ou qu'il n'est pas vide (erreur précédente)
+    if not os.path.exists(nom_fichier) or os.path.getsize(nom_fichier) < 10_000_000:
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(nom_fichier, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
     # limit=150000 évite de dépasser la limite de 1 Go de RAM sur Streamlit Cloud
-    return KeyedVectors.load_word2vec_format(chemin_fichier, binary=True, limit=150000)
+    return KeyedVectors.load_word2vec_format(nom_fichier, binary=True, limit=150000)
+    
 
 st.title("🧠 Aide Cémantix")
 st.write("Trouvez le mot secret en croisant les scores de similarité de vos essais.")
