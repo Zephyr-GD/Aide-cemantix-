@@ -7,17 +7,18 @@ from gensim.models import KeyedVectors
 st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
 MODELES = {
-    "Standard (Rapide - 200d CBOW - Miroir GitHub)": {
-        "url": "https://github.com",
+    "Standard (Rapide - 200d CBOW - Recommandé Streamlit)": {
+        "url": "https://embeddings.net",
         "fichier": "frWac_200_cbow.bin",
         "limit": 150000
     },
-    "Précision (Recommandé - 500d Skip-gram - Serveur Fauconnier)": {
+    "Précision (Lourd - 500d Skip-gram - Risque saturation RAM)": {
         "url": "https://embeddings.net",
         "fichier": "frWac_500_skip.bin",
         "limit": 100000
     }
 }
+
 
 def fichier_valide(chemin):
     if not os.path.exists(chemin) or os.path.getsize(chemin) < 50_000_000:
