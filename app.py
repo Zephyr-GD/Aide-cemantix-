@@ -118,7 +118,7 @@ if st.session_state.mots_saisis:
         masque_valide &= (diff <= marge)
         erreur_totale += diff
 
-    indices_candidats = np.where(masque_valide)
+    indices_candidats = np.where(masque_valide)[0]
 
     if len(indices_candidats) == 0:
         st.info("Aucun mot trouvé dans cet intervalle. Essayez d'augmenter la **marge d'erreur** ci-dessus.")
