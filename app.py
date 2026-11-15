@@ -7,13 +7,15 @@ from gensim.models import KeyedVectors
 st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
 MODELES = {
-    "Standard (Rapide - 200d CBOW - Fauconnier)": {
-        "url": "https://embeddings.net",
+    "Standard (Rapide - 200d CBOW - Miroir HuggingFace)": {
+        "url": "https://huggingface.co",
+        "url_secours": "https://embeddings.net",
         "fichier": "frWac_200_cbow.bin",
         "limit": 150000
     },
-    "Précision (Lourd - 500d Skip-gram - Fauconnier)": {
+    "Précision (Lourd - 500d Skip-gram - Serveur Fauconnier)": {
         "url": "https://embeddings.net",
+        "url_secours": "https://embeddings.net",
         "fichier": "frWac_500_skip.bin",
         "limit": 100000
     }
@@ -30,6 +32,15 @@ def fichier_valide(chemin):
     except Exception:
         return False
 
+def telecharger_fichier(url, destination):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    with requests.get(url, headers=headers, stream=True, allow_redirects=True, timeout=120) as r:
+        r.raise_for_status()
+        with open(destination, "wb") as f:
+            for chunk in r.iter_content(chunk_size=65536):
+                if chunk:
+                    f.write(chunk)
+
 @st.cache_resource
 def charger_modele(choix_modele):
     info = MODELES[choix_modele]
@@ -38,23 +49,23 @@ def charger_modele(choix_modele):
     if not fichier_valide(nom_fichier):
         if os.path.exists(nom_fichier):
             os.remove(nom_fichier)
-        
-        headers = {"User-Agent": "Mozilla/5.0"}
-        with requests.get(info["url"], headers=headers, stream=True, allow_redirects=True, timeout=120) as r:
-            r.raise_for_status()
-            content_type = r.headers.get("Content-Type", "")
-            if "text/html" in content_type:
-                raise ValueError(f"Le serveur a renvoyé une page HTML au lieu du modèle (URL : {r.url}).")
-            with open(nom_fichier, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
+        try:
+            telecharger_fichier(info["url"], nom_fichier)
+        except Exception:
+            pass
+
+    if not fichier_valide(nom_fichier):
+        if os.path.exists(nom_fichier):
+            os.remove(nom_fichier)
+        telecharger_fichier(info["url_secours"], nom_fichier)
 
     if not fichier_valide(nom_fichier):
         taille = os.path.getsize(nom_fichier) if os.path.exists(nom_fichier) else 0
-        with open(nom_fichier, "rb") as f:
-            apercu = f.read(120)
-        raise ValueError(f"Fichier invalide ({taille} octets). Début du contenu : {apercu}")
+        apercu = b""
+        if os.path.exists(nom_fichier):
+            with open(nom_fichier, "rb") as f:
+                apercu = f.read(100)
+        raise ValueError(f"Échec du téléchargement ({taille} octets). Aperçu : {apercu}")
 
     kv = KeyedVectors.load_word2vec_format(
         nom_fichier, 
@@ -66,51 +77,20 @@ def charger_modele(choix_modele):
     os.remove(nom_fichier)
     return kv
 
-@st.cache_resource
-def charger_modele(choix_modele):
-    info = MODELES[choix_modele]
-    nom_fichier = info["fichier"]
-
-    if not fichier_valide(nom_fichier):
-        if os.path.exists(nom_fichier):
-            os.remove(nom_fichier)
-        
-        headers = {"User-Agent": "Mozilla/5.0"}
-        with requests.get(info["url"], headers=headers, stream=True, allow_redirects=True, timeout=60) as r:
-            r.raise_for_status()
-            with open(nom_fichier, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-
-    if not fichier_valide(nom_fichier):
-        raise ValueError("Le fichier téléchargé est corrompu ou n'est pas un binaire Word2Vec.")
-
-    kv = KeyedVectors.load_word2vec_format(
-        nom_fichier, 
-        binary=True, 
-        limit=info["limit"], 
-        unicode_errors="ignore"
-    )
-    kv.fill_norms()
-    return kv
-
 st.title("🧠 Aide Cémantix")
 
-choix_modele = st.selectbox("Modèle linguistique :", list(MODELES.keys()), index=1)
+choix_modele = st.selectbox("Modèle linguistique :", list(MODELES.keys()), index=0)
 
 with st.spinner("Chargement du dictionnaire IA (peut prendre 30s au premier lancement)..."):
     try:
         modele = charger_modele(choix_modele)
     except Exception as e:
-        st.error(f"Erreur lors du chargement : {e}")
-        st.info("Si le serveur Fauconnier est lent ou indisponible, sélectionnez le modèle **Standard (Miroir GitHub)** dans le menu ci-dessus.")
+        st.error(f"Erreur détaillée : {e}")
         st.stop()
 
 if "mots_saisis" not in st.session_state:
     st.session_state.mots_saisis = []
 
-# Ajout rapide par lot (copier-coller)
 with st.expander("📋 Coller plusieurs indices d'un coup"):
     texte_lot = st.text_area(
         "Format : mot : score (un par ligne)", 
