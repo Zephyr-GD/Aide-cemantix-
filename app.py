@@ -7,28 +7,54 @@ from gensim.models import KeyedVectors
 # Configuration de la page
 st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
+def fichier_valide(chemin):
+    """Vérifie que le fichier existe, fait plus de 50 Mo et possède un en-tête Word2Vec valide."""
+    if not os.path.exists(chemin) or os.path.getsize(chemin) < 50_000_000:
+        return False
+    try:
+        with open(chemin, "rb") as f:
+            premiere_ligne = f.readline().decode("utf-8", errors="ignore").strip()
+            parts = premiere_ligne.split()
+            return len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
+    except Exception:
+        return False
+
 @st.cache_resource
 def charger_modele():
-    """Télécharge et charge le modèle Word2Vec français depuis GitHub Releases."""
-    url = "https://github.com"
+    """Télécharge et charge le modèle Word2Vec français."""
+    url = "https://github.com/lovasoa/cemantriche/releases/download/v0/frWac_non_lem_no_postag_no_phrase_200_cbow_cut100.bin"
     nom_fichier = "frWac_200_cbow_cut100.bin"
 
-    # Télécharge le fichier s'il n'existe pas ou s'il est incomplet
-    if not os.path.exists(nom_fichier) or os.path.getsize(nom_fichier) < 10_000_000:
-        with requests.get(url, stream=True) as r:
+    # Si un ancien fichier corrompu existe, on le supprime et on le retélécharge
+    if not fichier_valide(nom_fichier):
+        if os.path.exists(nom_fichier):
+            os.remove(nom_fichier)
+        
+        headers = {"User-Agent": "Mozilla/5.0"}
+        with requests.get(url, headers=headers, stream=True, allow_redirects=True) as r:
             r.raise_for_status()
             with open(nom_fichier, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                for chunk in r.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
 
-    # limit=150000 évite de dépasser la limite de 1 Go de RAM sur Streamlit Cloud
-    return KeyedVectors.load_word2vec_format(nom_fichier, binary=True, limit=150000)
+    # Vérification finale avant chargement
+    if not fichier_valide(nom_fichier):
+        raise ValueError("Le fichier téléchargé n'est pas un modèle Word2Vec valide.")
+
+    # limit=150000 préserve la RAM sur Streamlit Cloud (1 Go max)
+    return KeyedVectors.load_word2vec_format(
+        nom_fichier, 
+        binary=True, 
+        limit=150000, 
+        unicode_errors="ignore"
+    )
 
 st.title("🧠 Aide Cémantix")
 st.write("Trouvez le mot secret en croisant les scores de similarité de vos essais.")
 
 # Chargement du modèle
-with st.spinner("Chargement du dictionnaire IA (peut prendre 10 à 20 secondes au démarrage)..."):
+with st.spinner("Chargement du dictionnaire IA (15 à 30 secondes au premier lancement)..."):
     try:
         modele = charger_modele()
     except Exception as e:
@@ -51,7 +77,6 @@ with st.form("ajout_mot", clear_on_submit=True):
 
 if soumis and mot:
     if mot in modele:
-        # Évite les doublons en mettant à jour si le mot existe déjà
         st.session_state.mots_saisis = [m for m in st.session_state.mots_saisis if m["mot"] != mot]
         st.session_state.mots_saisis.append({"mot": mot, "score": score / 100.0})
     else:
@@ -80,7 +105,6 @@ if st.session_state.mots_saisis:
     vecteurs_vocab = modele.vectors
     normes_vocab = np.linalg.norm(vecteurs_vocab, axis=1)
     
-    # Masque booléen pour filtrer les mots qui respectent TOUS les indices
     masque_valide = np.ones(len(modele.index_to_key), dtype=bool)
     erreur_totale = np.zeros(len(modele.index_to_key))
 
@@ -88,26 +112,23 @@ if st.session_state.mots_saisis:
         vec_mot = modele[item["mot"]]
         norme_mot = np.linalg.norm(vec_mot)
         
-        # Similarité cosinus avec tous les mots du vocabulaire
         similarites = np.dot(vecteurs_vocab, vec_mot) / (normes_vocab * norme_mot)
         diff = np.abs(similarites - item["score"])
         
         masque_valide &= (diff <= marge)
         erreur_totale += diff
 
-    indices_candidats = np.where(masque_valide)[0]
+    indices_candidats = np.where(masque_valide)
 
     if len(indices_candidats) == 0:
         st.info("Aucun mot trouvé dans cet intervalle. Essayez d'augmenter la **marge d'erreur** ci-dessus.")
     else:
-        # Tri des candidats du plus proche au moins proche
         indices_tries = indices_candidats[np.argsort(erreur_totale[indices_candidats])]
         mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
         
         resultats = []
         for idx in indices_tries:
             candidat = modele.index_to_key[idx]
-            # On filtre les mots déjà testés et ceux contenant des chiffres ou caractères spéciaux
             if candidat not in mots_deja_testes and candidat.isalpha():
                 resultats.append(candidat)
             if len(resultats) >= 30:
@@ -118,4 +139,4 @@ if st.session_state.mots_saisis:
             st.write(", ".join([f"**{m}**" for m in resultats]))
         else:
             st.info("Tous les mots correspondants ont déjà été testés.")
-    
+                
