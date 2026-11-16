@@ -114,10 +114,13 @@ if st.session_state.mots_saisis:
 
     indices_tries = np.argsort(erreur_quadratique)
     mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
-    
-    # Exclure les terminaisons de verbes conjugués
     terminaisons_exclues = ("ait", "aient", "era", "eront", "iez", "ions", "âmes", "âtes", "èrent")
     
+    somme_poids = sum(
+        np.exp(item["score"] * 6.0) if item["score"] > 0 else 0.5 
+        for item in st.session_state.mots_saisis
+    )
+
     resultats = []
     for idx in indices_tries:
         candidat = modele.index_to_key[idx]
@@ -128,8 +131,15 @@ if st.session_state.mots_saisis:
             and len(candidat) >= 3
             and not candidat.endswith(terminaisons_exclues)
         ):
-            resultats.append(f"**{candidat}**")
+            rmse = np.sqrt(erreur_quadratique[idx] / somme_poids)
+            correspondance = max(0.0, min(100.0, (1.0 - rmse * 2.5) * 100))
+            resultats.append((candidat, correspondance))
         if len(resultats) >= 30:
             break
-    
-    st.write(", ".join(resultats))
+
+    colonnes = st.columns(3)
+    for i, (mot_candidat, pct) in enumerate(resultats):
+        with colonnes[i % 3]:
+            st.markdown(f"**{i + 1}. {mot_candidat}** — `{pct:.1f} %`")
+            st.progress(int(pct))
+ 
