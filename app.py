@@ -1,52 +1,28 @@
 import os
-import requests
 import numpy as np
 import streamlit as st
 from gensim.models import KeyedVectors
+from huggingface_hub import hf_hub_download
 
 st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
-URL_MODELE = "https://huggingface.co"
-NOM_FICHIER = "frWac_200_cbow.bin"
-
-
-def fichier_valide(chemin):
-    if not os.path.exists(chemin) or os.path.getsize(chemin) < 100_000_000:
-        return False
-    try:
-        with open(chemin, "rb") as f:
-            premiere_ligne = f.readline().decode("utf-8", errors="ignore").strip()
-            parts = premiere_ligne.split()
-            return len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
-    except Exception:
-        return False
-
 @st.cache_resource
 def charger_modele():
-    if not fichier_valide(NOM_FICHIER):
-        if os.path.exists(NOM_FICHIER):
-            os.remove(NOM_FICHIER)
-        
-        headers = {"User-Agent": "Mozilla/5.0"}
-        with requests.get(URL_MODELE, headers=headers, stream=True, allow_redirects=True, timeout=120) as r:
-            r.raise_for_status()
-            with open(NOM_FICHIER, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-
-    if not fichier_valide(NOM_FICHIER):
-        taille = os.path.getsize(NOM_FICHIER) if os.path.exists(NOM_FICHIER) else 0
-        raise ValueError(f"Fichier invalide ({taille} octets).")
-
+    chemin_fichier = hf_hub_download(
+        repo_id="Zephyr0001/Cemantix",
+        filename="frWac_non_lem_no_postag_no_phrase_200_cbow_cut100.bin",
+        repo_type="dataset"
+    )
+    
     kv = KeyedVectors.load_word2vec_format(
-        NOM_FICHIER, 
+        chemin_fichier, 
         binary=True, 
         unicode_errors="ignore"
     )
     kv.fill_norms()
-    os.remove(NOM_FICHIER)
+    os.remove(chemin_fichier)
     return kv
+
 
 st.title("🧠 Aide Cémantix")
 
