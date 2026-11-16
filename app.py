@@ -20,9 +20,11 @@ def charger_modele():
         unicode_errors="ignore"
     )
     kv.fill_norms()
-    os.remove(chemin_fichier)
+    
+    if os.path.exists(chemin_fichier):
+        os.remove(chemin_fichier)
+        
     return kv
-
 
 st.title("🧠 Aide Cémantix")
 
@@ -114,3 +116,4 @@ if st.session_state.mots_saisis:
             break
     
     st.write(", ".join(resultats))
+    
