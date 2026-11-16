@@ -85,7 +85,7 @@ if st.session_state.mots_saisis:
         st.rerun()
 
     st.divider()
-        st.subheader("🔍 Top 30 des meilleurs candidats (Classement optimisé)")
+    st.subheader("🔍 Top 30 des meilleurs candidats (Classement optimisé)")
 
     vecteurs_norm = modele.get_normed_vectors()
     # On limite la recherche aux 45 000 mots les plus fréquents (vocabulaire réel de Cémantix)
