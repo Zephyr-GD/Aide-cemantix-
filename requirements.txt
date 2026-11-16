@@ -2,3 +2,5 @@ streamlit
 gensim
 numpy
 huggingface_hub
+scikit-learn
+plotly
