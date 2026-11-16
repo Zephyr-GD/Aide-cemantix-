@@ -6,11 +6,9 @@ from gensim.models import KeyedVectors
 
 st.set_page_config(page_title="Aide Cémantix", page_icon="🧠", layout="centered")
 
-URL_MODELE = (
-    "https://huggingface.co"
-    "frWac_non_lem_no_postag_no_phrase_200_cbow_cut100.bin"
-)
+URL_MODELE = "https://huggingface.co"
 NOM_FICHIER = "frWac_200_cbow.bin"
+
 
 def fichier_valide(chemin):
     if not os.path.exists(chemin) or os.path.getsize(chemin) < 100_000_000:
