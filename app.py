@@ -85,21 +85,38 @@ if st.session_state.mots_saisis:
         st.rerun()
 
     st.divider()
-    st.subheader("🔍 Top 30 des meilleurs candidats (Classement par proximité)")
+        st.subheader("🔍 Top 30 des meilleurs candidats (Classement optimisé)")
 
     vecteurs_norm = modele.get_normed_vectors()
-    erreur_quadratique = np.zeros(len(modele.index_to_key))
+    # On limite la recherche aux 45 000 mots les plus fréquents (vocabulaire réel de Cémantix)
+    limite_vocab = min(45000, len(modele.index_to_key))
+    vecteurs_courants = vecteurs_norm[:limite_vocab]
+    
+    erreur_quadratique = np.zeros(limite_vocab)
 
     for item in st.session_state.mots_saisis:
         idx_mot = modele.key_to_index[item["mot"]]
         vec_mot = vecteurs_norm[idx_mot]
         
-        similarites = np.dot(vecteurs_norm, vec_mot)
-        poids = 1.0 + max(0.0, item["score"] * 5.0)
-        erreur_quadratique += poids * ((similarites - item["score"]) ** 2)
+        similarites = np.dot(vecteurs_courants, vec_mot)
+        
+        # Correction de l'échelle Cémantix : 67°C sur Cémantix ≈ 0.50 de similarité brute
+        score_brut = item["score"]
+        if score_brut > 0.35:
+            cible_ajustee = 0.35 + (score_brut - 0.35) * 0.55
+        else:
+            cible_ajustee = score_brut
+
+        # Poids exponentiel pour que les mots > 50°C guident la recherche
+        poids = np.exp(score_brut * 6.0) if score_brut > 0 else 0.5
+        
+        erreur_quadratique += poids * ((similarites - cible_ajustee) ** 2)
 
     indices_tries = np.argsort(erreur_quadratique)
     mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
+    
+    # Exclure les terminaisons de verbes conjugués
+    terminaisons_exclues = ("ait", "aient", "era", "eront", "iez", "ions", "âmes", "âtes", "èrent")
     
     resultats = []
     for idx in indices_tries:
@@ -109,11 +126,10 @@ if st.session_state.mots_saisis:
             and candidat.isalpha() 
             and candidat.islower() 
             and len(candidat) >= 3
+            and not candidat.endswith(terminaisons_exclues)
         ):
-            ecart_moyen = np.sqrt(erreur_quadratique[idx] / len(st.session_state.mots_saisis)) * 100
-            resultats.append(f"**{candidat}** (±{ecart_moyen:.1f}°)")
+            resultats.append(f"**{candidat}**")
         if len(resultats) >= 30:
             break
     
     st.write(", ".join(resultats))
-    
