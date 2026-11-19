@@ -43,6 +43,9 @@ with st.spinner("Chargement du dictionnaire IA (quelques secondes au démarrage)
 if "mots_saisis" not in st.session_state:
     st.session_state.mots_saisis = []
 
+if "liste_noire" not in st.session_state:
+    st.session_state.liste_noire = []
+
 # --- BARRE LATÉRALE : PARAMÈTRES DE RECHERCHE ---
 with st.sidebar:
     st.header("⚙️ Réglages de l'algorithme")
@@ -88,6 +91,33 @@ with st.sidebar:
 
             proximite_globale = (score_estime / poids_total) * 100
             st.metric(label=f"Proximité estimée pour '{mot_test}'", value=f"{proximite_globale:.1f} %")
+
+    st.divider()
+    st.subheader("🚫 Liste noire")
+
+    with st.form("form_liste_noire", clear_on_submit=True):
+        saisie_bannis = st.text_input(
+            "Bannir un ou plusieurs mots :",
+            placeholder="Ex: pluie, vent"
+        )
+        if st.form_submit_button("Bannir", use_container_width=True):
+            for m in re.split(r"[,;\s]+", saisie_bannis.strip().lower()):
+                if m and m not in st.session_state.liste_noire:
+                    st.session_state.liste_noire.append(m)
+            st.rerun()
+
+    if st.session_state.liste_noire:
+        for m in sorted(st.session_state.liste_noire):
+            c_m, c_b = st.columns([4, 1])
+            c_m.markdown(f"~~{m}~~")
+            if c_b.button("↩️", key=f"unban_{m}", help=f"Retirer '{m}' de la liste noire"):
+                st.session_state.liste_noire.remove(m)
+                st.rerun()
+        if st.button("Vider la liste noire", use_container_width=True):
+            st.session_state.liste_noire = []
+            st.rerun()
+    else:
+        st.caption("Aucun mot banni.")
 
 # --- ZONE PRINCIPALE : SAISIE DES INDICES ---
 col_saisie, col_lot = st.columns([1, 1])
@@ -180,8 +210,8 @@ if st.session_state.mots_saisis:
         erreur_quadratique += poids * ((similarites - cible_ajustee) ** 2)
         somme_poids += poids
 
-    indices_tries = np.argsort(erreur_quadratique)
     mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
+    mots_bannis = set(st.session_state.liste_noire)
     terminaisons_exclues = ("ait", "aient", "era", "eront", "iez", "ions", "âmes", "âtes", "èrent")
 
     pool_candidats = []
@@ -189,6 +219,7 @@ if st.session_state.mots_saisis:
         candidat = modele.index_to_key[idx]
         if (
             candidat not in mots_deja_testes
+            and candidat not in mots_bannis
             and candidat.isalpha()
             and candidat.islower()
             and len(candidat) >= 3
@@ -234,9 +265,12 @@ if st.session_state.mots_saisis:
         colonnes = st.columns(3)
         for i, (_, mot_candidat, pct) in enumerate(resultats):
             with colonnes[i % 3]:
-                c_mot, c_pct = st.columns([3, 1])
+                c_mot, c_pct, c_ban = st.columns([4, 2, 1])
                 c_mot.markdown(f"**{i + 1}.** `{mot_candidat}`")
                 c_pct.markdown(f"**{pct:.1f}%**")
+                if c_ban.button("🚫", key=f"ban_{mot_candidat}", help=f"Bannir '{mot_candidat}'"):
+                    st.session_state.liste_noire.append(mot_candidat)
+                    st.rerun()
                 st.progress(int(pct))
 
     with tab_carte:
