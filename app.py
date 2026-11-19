@@ -210,6 +210,8 @@ if st.session_state.mots_saisis:
         erreur_quadratique += poids * ((similarites - cible_ajustee) ** 2)
         somme_poids += poids
 
+    indices_tries = np.argsort(erreur_quadratique) 
+    
     mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
     mots_bannis = set(st.session_state.liste_noire)
     terminaisons_exclues = ("ait", "aient", "era", "eront", "iez", "ions", "âmes", "âtes", "èrent")
