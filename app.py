@@ -31,6 +31,39 @@ def charger_donnees():
     return kv, vecteurs_norm, vecteurs_courants, limite_vocab
 
 
+def lire_url(modele):
+    """Reconstruit indices et liste noire depuis les paramètres d'URL."""
+    params = st.query_params
+    indices = []
+    for part in params.get("i", "").split(","):
+        if ":" not in part:
+            continue
+        m, s = part.rsplit(":", 1)
+        try:
+            s = float(s)
+        except ValueError:
+            continue
+        if m in modele and not any(x["mot"] == m for x in indices):
+            indices.append({"mot": m, "score": s / 100.0})
+    bannis = []
+    for m in params.get("b", "").split(","):
+        if m and m not in bannis:
+            bannis.append(m)
+    return indices, bannis
+
+
+def ecrire_url():
+    """Écrit l'état courant dans l'URL (sans relancer le script)."""
+    val_i = ",".join(f"{x['mot']}:{x['score'] * 100:.2f}" for x in st.session_state.mots_saisis)
+    val_b = ",".join(st.session_state.liste_noire)
+    for cle, val in (("i", val_i), ("b", val_b)):
+        if val:
+            if st.query_params.get(cle) != val:
+                st.query_params[cle] = val
+        elif cle in st.query_params:
+            del st.query_params[cle]
+
+
 st.title("🧠 Aide Cémantix")
 
 with st.spinner("Chargement du dictionnaire IA (quelques secondes au démarrage)..."):
@@ -40,11 +73,14 @@ with st.spinner("Chargement du dictionnaire IA (quelques secondes au démarrage)
         st.error(f"Erreur lors du chargement : {e}")
         st.stop()
 
+# --- ÉTAT DE SESSION (restauré depuis l'URL au premier chargement) ---
 if "mots_saisis" not in st.session_state:
-    st.session_state.mots_saisis = []
+    indices_url, bannis_url = lire_url(modele)
+    st.session_state.mots_saisis = indices_url
+    st.session_state.liste_noire = bannis_url
 
-if "liste_noire" not in st.session_state:
-    st.session_state.liste_noire = []
+# Synchronise l'URL avec l'état à chaque exécution
+ecrire_url()
 
 # --- BARRE LATÉRALE : PARAMÈTRES DE RECHERCHE ---
 with st.sidebar:
@@ -93,7 +129,7 @@ with st.sidebar:
             st.metric(label=f"Proximité estimée pour '{mot_test}'", value=f"{proximite_globale:.1f} %")
 
     st.divider()
-    st.subheader("🚫 Liste noire")
+    st.subheader(f"🚫 Liste noire ({len(st.session_state.liste_noire)})")
 
     with st.form("form_liste_noire", clear_on_submit=True):
         saisie_bannis = st.text_input(
@@ -118,6 +154,10 @@ with st.sidebar:
             st.rerun()
     else:
         st.caption("Aucun mot banni.")
+
+    st.divider()
+    st.caption("💾 Votre partie (indices + liste noire) est sauvegardée dans l'URL. "
+               "Mettez la page en favori ou copiez le lien pour la retrouver ou la partager.")
 
 # --- ZONE PRINCIPALE : SAISIE DES INDICES ---
 col_saisie, col_lot = st.columns([1, 1])
@@ -164,6 +204,8 @@ with col_lot:
                         pass
             if ajoutes > 0:
                 st.rerun()
+            else:
+                st.warning("Aucun mot reconnu dans le texte collé.")
 
 # --- AFFICHAGE DES INDICES SAISIS ---
 if st.session_state.mots_saisis:
@@ -210,8 +252,8 @@ if st.session_state.mots_saisis:
         erreur_quadratique += poids * ((similarites - cible_ajustee) ** 2)
         somme_poids += poids
 
-    indices_tries = np.argsort(erreur_quadratique) 
-    
+    indices_tries = np.argsort(erreur_quadratique)
+
     mots_deja_testes = {m["mot"] for m in st.session_state.mots_saisis}
     mots_bannis = set(st.session_state.liste_noire)
     terminaisons_exclues = ("ait", "aient", "era", "eront", "iez", "ions", "âmes", "âtes", "èrent")
@@ -235,30 +277,21 @@ if st.session_state.mots_saisis:
         if len(pool_candidats) >= 150:
             break
 
-    # Sélection finale de 30 mots avec gestion de la diversité (MMR simplifié)
+    # Sélection finale de 30 mots avec diversité (MMR vectorisé)
     resultats = []
-    vecteurs_selectionnes = []
+    if pool_candidats:
+        mat_pool = vecteurs_courants[[c[0] for c in pool_candidats]]
+        corr_pool = np.array([c[2] for c in pool_candidats])
+        sim_max = np.full(len(pool_candidats), -1.0)
+        disponibles = np.ones(len(pool_candidats), dtype=bool)
 
-    while len(resultats) < 30 and pool_candidats:
-        meilleur_score_mmr = -999.0
-        meilleur_idx_pool = 0
-
-        for i, (vocab_idx, mot_cand, corr) in enumerate(pool_candidats):
-            if not vecteurs_selectionnes or diversite == 0:
-                penalite = 0.0
-            else:
-                vec_cand = vecteurs_courants[vocab_idx]
-                sim_max = max(np.dot(vec_cand, v_sel) for v_sel in vecteurs_selectionnes)
-                penalite = diversite * (sim_max * 100)
-
-            score_mmr = corr - penalite
-            if score_mmr > meilleur_score_mmr:
-                meilleur_score_mmr = score_mmr
-                meilleur_idx_pool = i
-
-        vocab_idx, mot_choisi, corr_choisie = pool_candidats.pop(meilleur_idx_pool)
-        resultats.append((vocab_idx, mot_choisi, corr_choisie))
-        vecteurs_selectionnes.append(vecteurs_courants[vocab_idx])
+        for n in range(min(30, len(pool_candidats))):
+            penalite = diversite * sim_max * 100 if n > 0 else 0.0
+            scores_mmr = np.where(disponibles, corr_pool - penalite, -np.inf)
+            meilleur = int(np.argmax(scores_mmr))
+            resultats.append(pool_candidats[meilleur])
+            disponibles[meilleur] = False
+            sim_max = np.maximum(sim_max, mat_pool @ mat_pool[meilleur])
 
     # --- ONGLETS : SUGGESTIONS VS CARTE 2D ---
     tab_suggestions, tab_carte = st.tabs(["🔍 Top 30 des suggestions", "🗺️ Carte sémantique 2D"])
@@ -267,12 +300,28 @@ if st.session_state.mots_saisis:
         colonnes = st.columns(3)
         for i, (_, mot_candidat, pct) in enumerate(resultats):
             with colonnes[i % 3]:
-                c_mot, c_pct, c_ban = st.columns([4, 2, 1])
+                c_mot, c_pct, c_add, c_ban = st.columns([4, 2, 1, 1])
                 c_mot.markdown(f"**{i + 1}.** `{mot_candidat}`")
                 c_pct.markdown(f"**{pct:.1f}%**")
+
+                with c_add.popover("➕", help=f"Jouer '{mot_candidat}' et saisir son score"):
+                    st.markdown(f"**{mot_candidat}**")
+                    sc = st.number_input(
+                        "Score (°C)", min_value=-100.0, max_value=100.0,
+                        value=15.0, step=0.01, key=f"sc_{mot_candidat}"
+                    )
+                    if st.button("Valider", key=f"ok_{mot_candidat}", use_container_width=True):
+                        st.session_state.mots_saisis = [
+                            x for x in st.session_state.mots_saisis if x["mot"] != mot_candidat
+                        ]
+                        st.session_state.mots_saisis.append({"mot": mot_candidat, "score": sc / 100.0})
+                        st.rerun()
+
                 if c_ban.button("🚫", key=f"ban_{mot_candidat}", help=f"Bannir '{mot_candidat}'"):
-                    st.session_state.liste_noire.append(mot_candidat)
+                    if mot_candidat not in st.session_state.liste_noire:
+                        st.session_state.liste_noire.append(mot_candidat)
                     st.rerun()
+
                 st.progress(int(pct))
 
     with tab_carte:
