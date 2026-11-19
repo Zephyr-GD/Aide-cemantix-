@@ -31,20 +31,32 @@ def charger_donnees():
     return kv, vecteurs_norm, vecteurs_courants, limite_vocab
 
 
+def poids_indice(item, boost):
+    """Poids d'un indice : dépend du score, fortement amplifié si le mot est classé (‰)."""
+    base = (max(0.0, item["score"]) + 0.2) ** 3
+    rang = item.get("rang", 0)
+    if rang > 0:
+        base *= 1.0 + boost * (rang / 999.0) ** 3
+    return base
+
+
 def lire_url(modele):
     """Reconstruit indices et liste noire depuis les paramètres d'URL."""
     params = st.query_params
     indices = []
     for part in params.get("i", "").split(","):
-        if ":" not in part:
+        champs = part.split(":")
+        if len(champs) not in (2, 3):
             continue
-        m, s = part.rsplit(":", 1)
+        m = champs[0]
         try:
-            s = float(s)
+            s = float(champs[1])
+            rang = int(champs[2]) if len(champs) == 3 else 0
         except ValueError:
             continue
+        rang = max(0, min(999, rang))
         if m in modele and not any(x["mot"] == m for x in indices):
-            indices.append({"mot": m, "score": s / 100.0})
+            indices.append({"mot": m, "score": s / 100.0, "rang": rang})
     bannis = []
     for m in params.get("b", "").split(","):
         if m and m not in bannis:
@@ -54,7 +66,10 @@ def lire_url(modele):
 
 def ecrire_url():
     """Écrit l'état courant dans l'URL (sans relancer le script)."""
-    val_i = ",".join(f"{x['mot']}:{x['score'] * 100:.2f}" for x in st.session_state.mots_saisis)
+    val_i = ",".join(
+        f"{x['mot']}:{x['score'] * 100:.2f}" + (f":{x['rang']}" if x.get("rang", 0) > 0 else "")
+        for x in st.session_state.mots_saisis
+    )
     val_b = ",".join(st.session_state.liste_noire)
     for cle, val in (("i", val_i), ("b", val_b)):
         if val:
@@ -62,6 +77,12 @@ def ecrire_url():
                 st.query_params[cle] = val
         elif cle in st.query_params:
             del st.query_params[cle]
+
+
+def ajouter_indice(mot, score_pct, rang=0):
+    """Ajoute ou remplace un indice dans l'état de session."""
+    st.session_state.mots_saisis = [x for x in st.session_state.mots_saisis if x["mot"] != mot]
+    st.session_state.mots_saisis.append({"mot": mot, "score": score_pct / 100.0, "rang": int(rang)})
 
 
 st.title("🧠 Aide Cémantix")
@@ -95,6 +116,16 @@ with st.sidebar:
         help="0 = mots les plus proches possibles (souvent des synonymes). Plus la valeur est haute, plus les idées sont variées."
     )
 
+    boost_rang = st.slider(
+        "Poids des mots classés (‰)",
+        min_value=0,
+        max_value=200,
+        value=50,
+        step=5,
+        help="Multiplicateur appliqué aux indices ayant un classement. Le mot 999 reçoit le poids maximal "
+             "(×(1+valeur)), les rangs plus bas sont progressivement moins amplifiés. 0 = désactivé."
+    )
+
     exclure_pluriels = st.checkbox(
         "Exclure les pluriels (-s, -x)",
         value=True,
@@ -121,7 +152,7 @@ with st.sidebar:
             for item in st.session_state.mots_saisis:
                 vec_ind = vecteurs_norm[modele.key_to_index[item["mot"]]]
                 sim = np.dot(vec_test, vec_ind)
-                p = (max(0.0, item["score"]) + 0.2) ** 3
+                p = poids_indice(item, boost_rang)
                 score_estime += sim * p
                 poids_total += p
 
@@ -165,16 +196,22 @@ col_saisie, col_lot = st.columns([1, 1])
 with col_saisie:
     with st.form("ajout_mot", clear_on_submit=True):
         st.subheader("➕ Ajouter un indice")
-        c1, c2 = st.columns([2, 1])
+        c1, c2, c3 = st.columns([2, 1, 1])
         with c1:
             mot = st.text_input("Mot testé", placeholder="Ex: maison").strip().lower()
         with c2:
             score = st.number_input("Score (°C)", min_value=-100.0, max_value=100.0, value=15.0, step=0.01)
+        with c3:
+            rang = st.number_input(
+                "Classement (‰)",
+                min_value=0, max_value=999, value=0, step=1,
+                help="0 = pas de classement. Si le mot figure dans le top 1000 de Cémantix, "
+                     "indiquez son rang (999 = le plus proche de la cible). Il aura un poids très élevé."
+            )
 
         if st.form_submit_button("Ajouter", use_container_width=True) and mot:
             if mot in modele:
-                st.session_state.mots_saisis = [m for m in st.session_state.mots_saisis if m["mot"] != mot]
-                st.session_state.mots_saisis.append({"mot": mot, "score": score / 100.0})
+                ajouter_indice(mot, score, rang)
                 st.rerun()
             else:
                 st.warning(f"Le mot **'{mot}'** est absent du dictionnaire.")
@@ -183,22 +220,26 @@ with col_lot:
     with st.expander("📋 Import rapide (Copier-coller depuis Cémantix)", expanded=False):
         texte_lot = st.text_area(
             "Collez directement votre tableau Cémantix ou une liste 'mot : score'",
-            placeholder="124   maison   24,56 °C\nnature : -2.32\nformulaire 9.81",
-            height=110
+            placeholder="124   maison   24,56 °C\nnature : -2.32\nformulaire 9.81\nforêt 45,10 °C 998‰",
+            height=110,
+            help="Un classement du type '998‰' en fin de ligne est reconnu automatiquement."
         )
         if st.button("Importer la liste", use_container_width=True):
             ajoutes = 0
             pattern = re.compile(r"(?:^\d+\s+)?([a-zàâäéèêëîïôöùûüçœæ-]+)[\s:]+(-?\d+(?:[.,]\d+)?)", re.IGNORECASE)
+            pattern_rang = re.compile(r"(\d{1,3})\s*‰")
             for ligne in texte_lot.splitlines():
-                match = pattern.search(ligne.strip())
+                ligne = ligne.strip()
+                match = pattern.search(ligne)
                 if match:
                     m = match.group(1).lower()
                     s_str = match.group(2).replace(",", ".")
                     try:
                         s = float(s_str)
                         if m in modele:
-                            st.session_state.mots_saisis = [x for x in st.session_state.mots_saisis if x["mot"] != m]
-                            st.session_state.mots_saisis.append({"mot": m, "score": s / 100.0})
+                            m_rang = pattern_rang.search(ligne)
+                            r = min(999, int(m_rang.group(1))) if m_rang else 0
+                            ajouter_indice(m, s, r)
                             ajoutes += 1
                     except ValueError:
                         pass
@@ -226,7 +267,8 @@ if st.session_state.mots_saisis:
             c_txt, c_del = st.columns([4, 1])
             temp = item["score"] * 100
             emoji = "🔥" if temp >= 40 else ("☀️" if temp >= 20 else ("🌤️" if temp > 0 else "❄️"))
-            c_txt.markdown(f"{emoji} **{item['mot']}** : `{temp:.2f} °C`")
+            badge_rang = f" 🎯 `{item['rang']}‰`" if item.get("rang", 0) > 0 else ""
+            c_txt.markdown(f"{emoji} **{item['mot']}** : `{temp:.2f} °C`{badge_rang}")
             if c_del.button("❌", key=f"del_{item['mot']}", help=f"Supprimer {item['mot']}"):
                 st.session_state.mots_saisis = [x for x in st.session_state.mots_saisis if x["mot"] != item["mot"]]
                 st.rerun()
@@ -248,7 +290,7 @@ if st.session_state.mots_saisis:
         else:
             cible_ajustee = score_brut
 
-        poids = (max(0.0, score_brut) + 0.2) ** 3
+        poids = poids_indice(item, boost_rang)
         erreur_quadratique += poids * ((similarites - cible_ajustee) ** 2)
         somme_poids += poids
 
@@ -310,11 +352,13 @@ if st.session_state.mots_saisis:
                         "Score (°C)", min_value=-100.0, max_value=100.0,
                         value=15.0, step=0.01, key=f"sc_{mot_candidat}"
                     )
+                    rg = st.number_input(
+                        "Classement (‰)", min_value=0, max_value=999,
+                        value=0, step=1, key=f"rg_{mot_candidat}",
+                        help="0 = pas de classement."
+                    )
                     if st.button("Valider", key=f"ok_{mot_candidat}", use_container_width=True):
-                        st.session_state.mots_saisis = [
-                            x for x in st.session_state.mots_saisis if x["mot"] != mot_candidat
-                        ]
-                        st.session_state.mots_saisis.append({"mot": mot_candidat, "score": sc / 100.0})
+                        ajouter_indice(mot_candidat, sc, rg)
                         st.rerun()
 
                 if c_ban.button("🚫", key=f"ban_{mot_candidat}", help=f"Bannir '{mot_candidat}'"):
@@ -335,7 +379,8 @@ if st.session_state.mots_saisis:
             tailles_carte = []
 
             for item in st.session_state.mots_saisis:
-                mots_carte.append(f"{item['mot']} ({item['score']*100:.0f}°C)")
+                suffixe = f" 🎯{item['rang']}‰" if item.get("rang", 0) > 0 else ""
+                mots_carte.append(f"{item['mot']} ({item['score']*100:.0f}°C){suffixe}")
                 vecteurs_carte.append(vecteurs_norm[modele.key_to_index[item["mot"]]])
                 types_carte.append("Indice testé")
                 tailles_carte.append(max(8, (item["score"] + 1) * 12))
